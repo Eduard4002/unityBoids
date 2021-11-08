@@ -2,6 +2,7 @@
 C# and HLSL code to run the boids simulation for Unity Game Engine
 
 Simulation video: https://youtu.be/o6HlRC_p-UU
+
 How to make it work:
 1. Create a new project in Unity, make sure to select 2D(you can select 3D if you want but then you will most likely have to change a few things in the code)
 2. Select the Main Camera and the C# script to it
