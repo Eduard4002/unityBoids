@@ -1,0 +1,170 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel Update
+#pragma kernel Postprocess
+
+RWTexture2D<float4> Result;
+
+uint numBoids;
+float centeringFactor;
+float avoidDistance;
+float avoidFactor;
+float visualRange;
+float matchingFactor;
+float width;
+float height;
+float boundAmount;
+float fixedDeltaTime;
+float speed;
+struct Boid{
+    float2 position;
+    float4 color;
+    float index;
+    float2 deltaPos;
+};
+RWStructuredBuffer<Boid> boids;
+
+float Distance(Boid boid1, Boid boid2){
+        return sqrt((boid1.position.x - boid2.position.x) * (boid1.position.x - boid2.position.x) + (boid1.position.y - boid2.position.y) * (boid1.position.y - boid2.position.y));
+}
+float random (float2 uv){
+    return frac(sin(dot(uv,float2(12.9898,78.233)))*43758.5453123);
+}
+
+float2 boundPosition(Boid b){
+    float2 newVec = 0;
+    if(b.position.x < 0){
+        newVec.x += boundAmount;
+    }
+    if(b.position.x > width){
+        newVec.x -= boundAmount;
+    }
+    if(b.position.y < 0){
+        newVec.y += boundAmount;
+    }
+    if(b.position.y > height){
+        newVec.y -= boundAmount;
+    }
+    return newVec;
+}
+
+float2 Cohesion(Boid boid){
+        float centerX = 0,centerY = 0;
+        int numNeighbors = 0; 
+        float2 newVec = 0;
+        for(uint i = 0; i < numBoids;i++){
+            if(Distance(boid,boids[i]) < visualRange){
+                centerX += boids[i].position.x;
+                centerY += boids[i].position.y;
+                numNeighbors++;
+            }
+        } 
+        
+        if(numNeighbors != 0){
+            centerX = centerX / numNeighbors;
+            centerY = centerY / numNeighbors;
+            newVec.x = (centerX - boid.position.x) * centeringFactor;
+            newVec.y = (centerY - boid.position.y) * centeringFactor;
+        }
+        return newVec;
+}
+float2 Seperation(Boid boid){
+        float moveX = 0; 
+        float moveY = 0;
+        float2 newVec = 0;
+        for(uint i = 0; i < numBoids;i++){
+            if(boids[i].index != boid.index){
+                if(Distance(boids[i], boid) < avoidDistance){
+                    moveX += boid.position.x - boids[i].position.x;
+                    moveY += boid.position.y - boids[i].position.y;
+                }
+            }
+        }
+        newVec.x += moveX * avoidFactor;
+        newVec.y += moveY * avoidFactor;
+        return newVec;
+        
+}
+float2 Allignment(Boid boid){
+
+        float avgDX = 0;
+        float avgDY = 0;
+        int numNeighbors = 0; 
+        float2 newVec = 0;
+        for(uint i = 0; i < numBoids;i++){
+            if(Distance(boid,boids[i]) < visualRange){
+                avgDX += boids[i].deltaPos.x;
+                avgDY += boids[i].deltaPos.y;
+                numNeighbors++;
+            }
+        }
+        if(numNeighbors != 0){
+            avgDX = avgDX / numNeighbors;
+            avgDY = avgDY / numNeighbors;
+            newVec.x += (avgDX - boid.deltaPos.x) * matchingFactor;
+            newVec.y += (avgDY - boid.deltaPos.y) * matchingFactor;
+        }
+        return newVec;
+    }
+
+
+[numthreads(16,1,1)]
+void Update (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= numBoids) return;
+
+    float2 cohesion = Cohesion(boids[id.x]);
+    float2 seperation = Seperation(boids[id.x]);
+    float2 allignment = Allignment(boids[id.x]);
+    float2 boundPos = boundPosition(boids[id.x]);
+
+    boids[id.x].deltaPos.x = cohesion.x + seperation.x + allignment.x + boundPos.x;
+    boids[id.x].deltaPos.y = cohesion.y + seperation.y + allignment.y + boundPos.y;
+    boids[id.x].position.x += (boids[id.x].deltaPos.x * fixedDeltaTime * speed); 
+    boids[id.x].position.y += (boids[id.x].deltaPos.y *fixedDeltaTime * speed);
+
+    float colorR = random(id.x);
+    float colorG = random(boids[id.x].position.x);
+    float colorB = random(boids[id.x].position.y);
+    boids[id.x].color = float4(colorR,colorG,colorB,1);
+
+    Result[int2(boids[id.x].position.x, boids[id.x].position.y)] += boids[id.x].color;
+}
+
+RWTexture2D<float4> ResultProcessed;
+float diffuseSpeed;
+float evaporateSpeed;
+[numthreads(8,8,1)]
+void Postprocess(uint3 id : SV_DispatchThreadID){
+    if (id.x < 0 || id.x >= width || id.y < 0 || id.y >= height) return;
+
+	float4 originalValue = Result[id.xy];
+
+	float3x3 gaussianKernel =
+	{
+		0.0625, 0.125, 0.0625,
+		0.125, 0.25, 0.125,
+		0.0625, 0.125, 0.0625,
+	};
+
+	float4 sum = 0;
+	for (int oy = -1; oy <= 1; oy++)
+	{
+		for (int ox = -1; ox <= 1; ox++)
+		{
+			int2 samplePos = int2(id.x + ox, id.y + oy);
+
+			if (samplePos.x >= 0 && samplePos.x < width && samplePos.y >= 0 && samplePos.y < height)
+			{
+				sum += Result[samplePos] * gaussianKernel[ox + 1][oy + 1];
+			}
+		}
+	}
+
+	float4 blurredResult = sum;
+
+	float4 diffusedValue = lerp(originalValue, blurredResult, diffuseSpeed * fixedDeltaTime);
+	float4 evaporatedValue = max(0, diffusedValue - evaporateSpeed * fixedDeltaTime);
+
+	ResultProcessed[id.xy] = evaporatedValue;
+}
+
